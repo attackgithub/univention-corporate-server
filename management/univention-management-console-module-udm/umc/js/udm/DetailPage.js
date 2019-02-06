@@ -903,41 +903,80 @@ define([
 
 			var _getOptionProperty = function(properties) {
 				var result = array.filter(properties, function(item) {
-					return item.id == '$options$';
+					return item.id === '$options$';
 				});
 				return result.length ? result[0] : null;
 			};
 
 			var option_prop = _getOptionProperty(properties);
+			if (this._multiEdit || !option_prop || !option_prop.widgets.length) {
+				properties = array.filter(properties, function(item) {
+					return item.id !== '$options$';
+				});
+				return properties;
+			}
+
 			var option_values = {};
-			if ( option_prop && option_prop.widgets.length > 0 && !this._multiEdit) {
-				var optiontab = {
-					label: _('Options'),
-					description: _('Options describing the basic features of the LDAP object'),
+			var option_widgets = [];
+			var option_layout = [];
+			var app_layout = [];
+			array.forEach(option_prop.widgets, function(option) {
+				option = lang.clone(option);
+				// special case: bring options from template into the widget
+				if (template && template._options) {
+					option.value = template._options.indexOf(option.id) > -1;
+				}
+				if (option.is_app_option) {
+					option.labelConf = {
+						'class': tools.getIconClass(option.icon, 'scalable', undefined, 'background-size: contain;'),
+						'style': 'height: 50px; padding-left: 60px; display: flex; align-items: center; padding-bottom: 0; margin-bottom: 1.2em;'
+					};
+				}
+				option_widgets.push(lang.mixin({
+					disabled: isNewObject ? false : ! option.editable,
+				}, option));
+				option_values[option.id] = option.value;
+
+				if (option.is_app_option) {
+					app_layout.push(option.id);
+				} else {
+					option_layout.push(option.id);
+				}
+			});
+
+			var optiontab = {
+				label: _('Options'),
+				description: _('Options describing the basic features of the LDAP object'),
+				layout: [ '$options$' ]
+			};
+
+			option_prop.widgets = option_widgets;
+			option_prop.layout = [];
+			if (app_layout.length) {
+				option_prop.layout.push({
+					label: _('Apps'),
+					layout: app_layout,
+					description: _('Hier können Sie den Benutzer für eine der installierten Apps aktivieren. Der Benutzer kann sich anschließend an der App anmelden und sie nutzen.')
+				});
+				optiontab = {
+					label: _('Apps & Options'),
+					description: _('Activate apps and basic features of the LDAP object'),
 					layout: [ '$options$' ]
 				};
-				layout.push( optiontab);
+			}
+			if (option_layout.length) {
+				option_prop.layout.push({
+					label: _('Options'),
+					layout: option_layout
+				});
+			}
 
-				var option_widgets = [];
-				var option_layout = [];
-				array.forEach( option_prop.widgets, function ( option) {
-					option = lang.clone(option);
-					// special case: bring options from template into the widget
-					if (template && template._options) {
-						option.value = template._options.indexOf(option.id) > -1;
-					}
-					option_widgets.push( lang.mixin( {
-						disabled: isNewObject ? false : ! option.editable
-					}, option));
-					option_values[ option.id ] = option.value;
-					option_layout.push( option.id);
-				});
-				option_prop.widgets = option_widgets;
-				option_prop.layout = option_layout;
+			// replace the existing tab (which exists so that it's displayed earlier)
+			var tab = array.filter(layout, function(item) { return item.label === 'Options'; });
+			if (!tab.length) {
+				layout.push(optiontab);
 			} else {
-				properties = array.filter( properties, function( item) {
-					return item.id != '$options$';
-				});
+				lang.mixin(tab[0], optiontab);
 			}
 
 			formBuiltDeferred.then(lang.hitch(this, function() {
@@ -991,7 +1030,8 @@ define([
 			return tools.forEachAsync(layout, function(ilayout, idx) {
 				// create a new page, i.e., subtab
 				var subTab = new Page({
-					title: ilayout.label || ilayout.name, //TODO: 'name' should not be necessary
+					title: entities.encode(ilayout.label || ilayout.name).replace(/ /g, '&nbsp;'), //TODO: 'name' should not be necessary
+					titleAllowHTML: true,
 					noFooter: true,
 					headerText: ilayout.description || ilayout.label || ilayout.name,
 					helpText: idx === 0 && metaInfo.help_text ? metaInfo.help_text : ''
