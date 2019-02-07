@@ -32,7 +32,7 @@
 # <http://www.gnu.org/licenses/>.
 #
 
-
+import os
 import re
 
 from univention.appcenter.app import CaseSensitiveConfigParser
@@ -138,6 +138,9 @@ class SchemaObject(object):
 			oid = '%s.%s' % (oid, int(new_prefix))
 		self.oid = '%s.%s.%s' % (oid, self.ldap_type_oid_suffix, suffix)
 
+	def __repr__(self):
+		return '<%s(%s)>' % (type(self).__name__, ', '.join('%s=%r' % (attr.name, getattr(self, attr.name)) for attr in self._attrs))
+
 
 class ExtendedAttribute(SchemaObject):
 	ldap_type = 'attributetype'
@@ -156,6 +159,12 @@ class ExtendedAttribute(SchemaObject):
 
 	belongs_to = HiddenAttribute()
 	position = HiddenAttribute()
+	full_width = HiddenAttribute()
+	disable_web = HiddenAttribute()
+	copyable = HiddenAttribute()
+	required = HiddenAttribute()
+	options = HiddenAttribute()
+	tab_name = HiddenAttribute()
 
 	@property
 	def dn(self):
@@ -165,17 +174,23 @@ class ExtendedAttribute(SchemaObject):
 		if 'syntax' not in kwargs:
 			kwargs['syntax'] = 'String'
 		if 'belongs_to' not in kwargs:
-			kwargs['belongs_to'] = '%sUser' % app.id
+			kwargs['belongs_to'] = '%sUser' % (app.id,)
 		if 'position' not in kwargs:
 			kwargs['position'] = 'cn=%s,cn=custom attributes,cn=univention' % app.id
 		if 'module' not in kwargs:
 			kwargs['module'] = 'users/user'
 		if 'single_value' not in kwargs:
 			kwargs['single_value'] = True
+		if 'full_width' not in kwargs:
+			kwargs['full_width'] = False
+		if 'tab_name' not in kwargs:
+			kwargs['tab_name'] = '    %s' % (app.name,)
 		kwargs['module'] = re.split('\s*,\s*', kwargs['module'])
+		if 'options' in kwargs:
+			kwargs['options'] = re.split('\s*,\s*', kwargs.get('options', []))
+		kwargs.setdefault('options', [])
 		super(ExtendedAttribute, self).__init__(app, **kwargs)
 		self._udm_syntax = None
-		self._full_width = False
 		if self.syntax == 'Boolean':
 			self._syntax = '1.3.6.1.4.1.1466.115.121.1.7'
 			self._equality = 'booleanMatch'
@@ -196,6 +211,35 @@ class ExtendedAttribute(SchemaObject):
 			self._udm_syntax = 'string'
 		else:
 			raise NotImplementedError('Syntax %r not supported' % self.syntax)
+
+
+class ExtendedOption(SchemaObject):
+	name = HiddenAttribute()
+	position = HiddenAttribute()
+	description = HiddenAttribute()
+	long_description = HiddenAttribute()
+	description_de = HiddenAttribute()
+	long_description_de = HiddenAttribute()
+	default = HiddenAttribute()
+	editable = HiddenAttribute()
+	module = HiddenAttribute()
+	object_class = HiddenAttribute()
+
+	def __init__(self, app, **kwargs):
+		if 'position' not in kwargs:
+			kwargs['position'] = 'cn=%s,cn=custom attributes,cn=univention' % app.id
+		if 'module' not in kwargs:
+			kwargs['module'] = 'users/user'
+		kwargs.setdefault('editable', True)
+		kwargs.setdefault('description', app.name)
+		#kwargs.setdefault('object_class', kwargs['name'])
+		kwargs['module'] = re.split('\s*,\s*', kwargs['module'])
+		super(ExtendedOption, self).__init__(app, **kwargs)
+		self.icon = '%s.svg' % (self.name,)
+
+	@property
+	def dn(self):
+		return 'cn=%s,%s,%s' % (self.name, self.position, ucr_get('ldap/base'))
 
 
 class ObjectClass(SchemaObject):
@@ -222,6 +266,7 @@ class ObjectClass(SchemaObject):
 def get_extended_attributes(app):
 	attributes = []
 	object_classes = []
+	extended_options = []
 	parser = read_ini_file(app.get_cache_file('attributes'), CaseSensitiveConfigParser)
 	object_class_suffix = 1
 	attribute_suffix = 1
@@ -235,38 +280,79 @@ def get_extended_attributes(app):
 				object_class_suffix += 1
 			attribute_logger.debug('Adding %s to list of classes' % section)
 			object_classes.append(object_class)
-		else:
+
+			# for backwards compatibility with UCS 4.3 we can't use the new type == ExtendedOption, so this flag is the equivalent
+			if kwargs.get('add_extended_option') == '1':
+				okwargs = kwargs.copy()
+				okwargs['name'] = kwargs.get('option_name', '%sUser' % (app.id,))
+				okwargs.setdefault('object_class', object_class.name)
+				option = ExtendedOption(app, **okwargs)
+				attribute_logger.debug('Adding %s to list of options' % (okwargs['name'],))
+				extended_options.append(option)
+		elif kwargs.get('type') == 'ExtendedOption':  # Can't be used if System < UCS 4.4, use add_extended_option instead!
+			option = ExtendedOption(app, **kwargs)
+			attribute_logger.debug('Adding %s to list of options' % section)
+			extended_options.append(option)
+		elif kwargs.get('type') == 'ExtendedAttribute':
 			attribute = ExtendedAttribute(app, **kwargs)
 			attribute_logger.debug('Adding %s to list of attributes' % section)
 			if attribute.oid is None:
 				attribute.set_standard_oid(app, attribute_suffix)
 				attribute_suffix += 1
 			attributes.append(attribute)
+		else:  # ignore, so that it is extensible for the future :-)
+			attribute_logger.warn('Unknown attribute type for section %s: %r' % (section, kwargs.get('type')))
+
 	if app.generic_user_activation:
+		# TODO: remove this useless attribute, objectClass=appidUser should be enough for future apps
 		attribute_name = app.generic_user_activation
-		if attribute_name is True:
-			attribute_name = '%sActivated' % app.id
-		if attribute_name not in [attr.name for attr in attributes]:
-			attribute_logger.debug('Adding %s to list of attributes' % attribute_name)
-			attribute = ExtendedAttribute(app, name=attribute_name, description='Activate user for %s' % app.name, description_de='Nutzer für %s aktivieren' % app.name, syntax='Boolean')
-			attribute.set_standard_oid(app, attribute_suffix)
-			attribute._full_width = True
-			attributes.insert(0, attribute)
+		if attribute_name == 'Version1':  # backwards compatibility
+			attribute_name = '%sActivated' % (app.id,)
+			if attribute_name not in [attr.name for attr in attributes]:
+				attribute_logger.debug('Adding %s to list of attributes' % attribute_name)
+				attribute = ExtendedAttribute(app, name=attribute_name, description='Activate user for %s' % app.name, description_de='Nutzer für %s aktivieren' % app.name, syntax='Boolean')
+				attribute.set_standard_oid(app, attribute_suffix)
+				attribute.full_width = False
+				attribute.disable_web = True  # important!
+				attribute.default = True  # important! the boolean flag is the extended option, so this must be enabled
+				attributes.insert(0, attribute)
+
+		option_name = app.generic_user_activation
+		if option_name is True:
+			option_name = '%sUser' % (app.id,)
+		if option_name not in [opt.name for opt in extended_options]:
+			attribute_logger.debug('Adding %s to list of options' % option_name)
+			option = ExtendedOption(app, name=option_name, object_class=option_name, long_description='Activate user for %s' % app.name, long_description_de='Nutzer für %s aktivieren' % app.name)
+			extended_options.insert(0, option)
+
 	for attribute in attributes:
 		if attribute.belongs_to not in [obj.name for obj in object_classes]:
 			class_name = attribute.belongs_to
 			object_class = ObjectClass(app, name=class_name)
 			object_class.set_standard_oid(app, object_class_suffix)
+			object_class_suffix += 1
 			object_classes.insert(0, object_class)
 		object_class = [obj for obj in object_classes if obj.name == attribute.belongs_to][0]
 		if attribute.name not in re.split('\s*,\s*', object_class.must):
 			object_class.may = '%s, %s' % (object_class.may, attribute.name)
-	return attributes, object_classes
+		if option in extended_options:
+			if option.name == attribute.belongs_to:
+				attribute.options.append(option.name)
+
+	for option in extended_options:
+		if option.object_class not in [obj.name for obj in object_classes]:
+			class_name = option.object_class
+			object_class = ObjectClass(app, name=class_name)
+			object_class.set_standard_oid(app, object_class_suffix)
+			object_class_suffix += 1
+			object_classes.insert(0, object_class)
+
+	return attributes, object_classes, extended_options
 
 
 def get_schema(app):
 	ret = []
-	attributes, object_classes = get_extended_attributes(app)
+	attributes, object_classes, __ = get_extended_attributes(app)
 	for attribute in attributes:
 		ret.append(attribute.to_schema())
 	for object_class in object_classes:
@@ -292,14 +378,25 @@ def create_extended_attribute(attribute, app, layout_position, lo, pos):
 	if attribute.default:
 		attrs['default'] = attribute.default
 	attrs['tabPosition'] = str(layout_position)
-	attrs['tabName'] = 'Apps'
+	attrs['tabName'] = attribute.tab_name
 	attrs['groupName'] = app.name
 	attrs['ldapMapping'] = attribute.name
 	attrs['objectClass'] = attribute.belongs_to
 	attrs['module'] = attribute.module
 	attrs['deleteObjectClass'] = True
 	attrs['mayChange'] = True
-	attrs['fullWidth'] = attribute._full_width
+	attrs['fullWidth'] = attribute.full_width
+#	attrs['hook'] = None
+	attrs['disableUDMWeb'] = attribute.disable_web
+#	attrs['groupPosition'] = None
+#	attrs['tabAdvanced'] = None
+#	attrs['overwriteTab'] = None
+#	attrs['overwritePosition'] = None
+	attrs['valueRequired'] = attribute.required
+#	attrs['notEditable'] = None
+#	attrs['doNotSearch'] = None
+	attrs['copyable'] = attribute.copyable
+	attrs['options'] = attribute.options
 	attribute_logger.debug('Creating DN: %s' % attribute.dn)
 	if not create_object_if_not_exists('settings/extended_attribute', lo, pos, **attrs):
 		attribute_logger.debug('... already exists. Overwriting!')
@@ -309,3 +406,36 @@ def create_extended_attribute(attribute, app, layout_position, lo, pos):
 def remove_extended_attribute(attribute, lo, pos):
 	attribute_logger.debug('Removing DN: %s' % attribute.dn)
 	remove_object_if_exists('settings/extended_attribute', lo, pos, attribute.dn)
+
+
+def create_extended_option(option, app, lo, pos):
+	attrs = {}
+	option_position = '%s,%s' % (option.position, ucr_get('ldap/base'))
+	create_recursive_container(option_position, lo, pos)
+	pos.setDn(option_position)
+	attrs['name'] = option.name
+	attrs['shortDescription'] = option.description
+	if option.long_description:
+		attrs['longDescription'] = option.long_description
+	if option.description_de:
+		attrs['translationShortDescription'] = [('de_DE', option.description_de)]
+	if option.long_description_de:
+		attrs['translationLongDescription'] = [('de_DE', option.long_description_de)]
+	attrs['default'] = option.default
+	attrs['editable'] = option.editable
+	attrs['module'] = option.module
+	attrs['objectClass'] = option.object_class
+	attrs['isApp'] = '1'
+	attribute_logger.debug('Creating DN: %s' % option.dn)
+	if not create_object_if_not_exists('settings/extended_options', lo, pos, **attrs):
+		attribute_logger.debug('... already exists. Overwriting!')
+		modify_object('settings/extended_options', lo, pos, option.dn, **attrs)
+
+	icon = '/usr/share/univention-management-console-frontend/js/dijit/themes/umc/icons/scalable/%s' % (option.icon,)
+	if not os.path.exists(icon):
+		os.symlink(app.logo_name, icon)
+
+
+def remove_extended_option(option, lo, pos):
+	attribute_logger.debug('Removing DN: %s' % option.dn)
+	remove_object_if_exists('settings/extended_option', lo, pos, option.dn)
