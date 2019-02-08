@@ -188,6 +188,9 @@ def init(lo, position, module, template_object=None, force_reload=False):
 	# re-build layout if there any overwrites defined
 	univention.admin.ucr_overwrite_module_layout(module)
 
+	# some choices extended option / attributes to be loaded
+	univention.admin.syntax.update_choices()
+
 	module.initialized = 1
 
 
