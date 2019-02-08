@@ -250,7 +250,7 @@ class Register(CredentialsAction):
 			for attribute in attributes:
 				remove_extended_attribute(attribute, lo, pos)
 			for option in options:
-				remove_extended_option(options, lo, pos)
+				remove_extended_option(option, lo, pos)
 
 	def _register_listener_for_apps(self, apps, args):
 		if not self._shall_register(args, 'listener'):

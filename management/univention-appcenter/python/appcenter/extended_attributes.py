@@ -304,20 +304,19 @@ def get_extended_attributes(app):
 			attribute_logger.warn('Unknown attribute type for section %s: %r' % (section, kwargs.get('type')))
 
 	if app.generic_user_activation:
-		# TODO: remove this useless attribute, objectClass=appidUser should be enough for future apps
-		attribute_name = app.generic_user_activation
-		if attribute_name == 'Version1':  # backwards compatibility
+		attribute_name = app.generic_user_activation_attribute
+		if attribute_name is True:
 			attribute_name = '%sActivated' % (app.id,)
-			if attribute_name not in [attr.name for attr in attributes]:
-				attribute_logger.debug('Adding %s to list of attributes' % attribute_name)
-				attribute = ExtendedAttribute(app, name=attribute_name, description='Activate user for %s' % app.name, description_de='Nutzer für %s aktivieren' % app.name, syntax='Boolean')
-				attribute.set_standard_oid(app, attribute_suffix)
-				attribute.full_width = False
-				attribute.disable_web = True  # important!
-				attribute.default = True  # important! the boolean flag is the extended option, so this must be enabled
-				attributes.insert(0, attribute)
+		if attribute_name and attribute_name not in [attr.name for attr in attributes]:
+			attribute_logger.debug('Adding %s to list of attributes' % attribute_name)
+			attribute = ExtendedAttribute(app, name=attribute_name, description='Activate user for %s' % app.name, description_de='Nutzer für %s aktivieren' % app.name, syntax='Boolean')
+			attribute.set_standard_oid(app, attribute_suffix)
+			attribute.full_width = False
+			attribute.disable_web = True  # important!
+			attribute.default = True  # important! the boolean flag is the extended option, so this must be enabled
+			attributes.insert(0, attribute)
 
-		option_name = app.generic_user_activation
+		option_name = app.generic_user_activation_option
 		if option_name is True:
 			option_name = '%sUser' % (app.id,)
 		if option_name not in [opt.name for opt in extended_options]:
@@ -438,4 +437,4 @@ def create_extended_option(option, app, lo, pos):
 
 def remove_extended_option(option, lo, pos):
 	attribute_logger.debug('Removing DN: %s' % option.dn)
-	remove_object_if_exists('settings/extended_option', lo, pos, option.dn)
+	remove_object_if_exists('settings/extended_options', lo, pos, option.dn)
