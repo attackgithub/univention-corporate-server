@@ -959,16 +959,20 @@ define([
 					description: _('Hier können Sie den Benutzer für eine der installierten Apps aktivieren. Der Benutzer kann sich anschließend an der App anmelden und sie nutzen.')
 				});
 				optiontab = {
-					label: _('Apps & Options'),
+					label: _('Apps'),
 					description: _('Activate apps and basic features of the LDAP object'),
 					layout: [ '$options$' ]
 				};
 			}
 			if (option_layout.length) {
-				option_prop.layout.push({
-					label: _('Options'),
-					layout: option_layout
-				});
+				if (app_layout.length) {
+					option_prop.layout.push({
+						label: _('Options'),
+						layout: option_layout
+					});
+				} else {
+					option_prop.layout = option_layout;
+				}
 			}
 
 			// replace the existing tab (which exists so that it's displayed earlier)
